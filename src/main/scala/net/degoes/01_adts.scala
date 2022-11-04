@@ -1,6 +1,8 @@
 package net.degoes
 
 import java.time.Instant
+import java.time.YearMonth
+import scala.concurrent.duration.Duration
 
 /*
  * INTRODUCTION
@@ -30,7 +32,7 @@ object credit_card {
    *  * Expiration date
    *  * Security code
    */
-  type CreditCard
+  final case class CreditCard(number: String, name: String, exporationDate: YearMonth, securityCode: String)
 
   /**
    * EXERCISE 2
@@ -40,7 +42,12 @@ object credit_card {
    * or a digital product, such as a book or movie, or access to an event, such
    * as a music concert or film showing.
    */
-  type Product
+  sealed trait Product
+  object Product {
+    final case class Physical(dimensions: (Double, Double, Double), weight: Double) extends Product
+    final case class Digital(url: String)                                           extends Product
+    final case class Ticket(date: Instant)                                          extends Product
+  }
 
   /**
    * EXERCISE 3
@@ -49,7 +56,29 @@ object credit_card {
    * of a product price, which could be one-time purchase fee, or a recurring
    * fee on some regular interval.
    */
-  type PricingScheme
+  sealed trait PricingScheme { self =>
+    def forever: PricingScheme  = PricingScheme.Recurring(self)
+    def &&(that: PricingScheme) = PricingScheme.Both(self, that)
+    def delay(time: Duration)   = PricingScheme.Delayed(self, time)
+  }
+
+  object PricingScheme {
+    final case class OneTime(fee: Double) extends PricingScheme
+    /*
+     *final case class Recurring(
+     *  initiationFee: Double,
+     *  recurringFee: Double,
+     *  interval: java.time.Duration,
+     *  start: java.time.Instant
+     *) extends PricingScheme
+     */
+    final case class Recurring(schema: PricingScheme)                   extends PricingScheme
+    final case class Both(left: PricingScheme, right: PricingScheme)    extends PricingScheme
+    final case class Delayed(schema: PricingScheme, duration: Duration) extends PricingScheme
+
+    def apply(fee: Double): PricingScheme = OneTime(fee)
+  }
+
 }
 
 /**
@@ -66,34 +95,25 @@ object events {
    * Refactor the object-oriented data model in this section to a more
    * functional one, which uses only sealed traits and case classes.
    */
-  abstract class Event(val id: Int) {
+  final case class Event(id: Int, time: Instant, eventType: EventType)
 
-    def time: Instant
+  sealed trait EventType
+  object EventType {
+    final case class UserEvent(userName: String, userEventType: UserEventType)
+    final case class DeviceEvent(deviceId: Int, deviceEventType: DeviceEventType)
   }
 
-  // Events are either UserEvent (produced by a user) or DeviceEvent (produced by a device),
-  // please don't extend both it will break code!!!
-  trait UserEvent extends Event {
-    def userName: String
+  sealed trait UserEventType
+  object UserEventType {
+    final case class Purchase(item: String, price: Double) extends UserEventType
+    case object AccounCreated                              extends UserEventType
   }
 
-  // Events are either UserEvent (produced by a user) or DeviceEvent (produced by a device),
-  // please don't extend both it will break code!!!
-  trait DeviceEvent extends Event {
-    def deviceId: Int
+  sealed trait DeviceEventType
+  object DeviceEventType {
+    final class SensorUpdated(reading: Option[Double]) extends DeviceEventType
+    case object DeviceActivated                        extends DeviceEventType
   }
-
-  class SensorUpdated(id: Int, val deviceId: Int, val time: Instant, val reading: Option[Double])
-      extends Event(id)
-      with DeviceEvent
-
-  class DeviceActivated(id: Int, val deviceId: Int, val time: Instant) extends Event(id) with DeviceEvent
-
-  class UserPurchase(id: Int, val item: String, val price: Double, val time: Instant, val userName: String)
-      extends Event(id)
-      with UserEvent
-
-  class UserAccountCreated(id: Int, val userName: String, val time: Instant) extends Event(id) with UserEvent
 
 }
 
@@ -114,7 +134,7 @@ object documents {
    * Using only sealed traits and case classes, create a simplified but somewhat
    * realistic model of a Document.
    */
-  type Document
+  final case class Document(userId: UserId, docId: DocId, content: DocContent)
 
   /**
    * EXERCISE 2
@@ -123,7 +143,19 @@ object documents {
    * type that a given user might have with respect to a document. For example,
    * some users might have read-only permission on a document.
    */
-  type AccessType
+  sealed trait AccessType {
+    def canRead: Boolean  = ordinal >= 1
+    def canWrite: Boolean = ordinal >= 2
+    def canShare: Boolean = ordinal >= 3
+    def ordinal: Int
+  }
+  object AccessType {
+    sealed abstract class AbstractAccessType(val ordinal: Int) extends AccessType
+    case object Denied                                         extends AbstractAccessType(0)
+    case object ReadOnly                                       extends AbstractAccessType(1)
+    case object ReadWrite                                      extends AbstractAccessType(0)
+    case object ReadWriteShare                                 extends AbstractAccessType(3)
+  }
 
   /**
    * EXERCISE 3
@@ -132,7 +164,7 @@ object documents {
    * permissions that a user has on a set of documents they have access to.
    * Do not store the document contents themselves in this model.
    */
-  type DocPermissions
+  final case class DocPermissions(lookup: Map[DocId, AccessType])
 }
 
 /**
@@ -147,7 +179,14 @@ object bank {
    *
    * Using only sealed traits and case classes, develop a model of a customer at a bank.
    */
-  type Customer
+  final case class Customer(
+    userId: String,
+    email: String,
+    name: String,
+    address: String,
+    salt: Long,
+    passwordHash: String
+  )
 
   /**
    * EXERCISE 2
@@ -157,7 +196,11 @@ object bank {
    * against a given currency. Another account type allows the user to earn
    * interest at a given rate for the holdings in a given currency.
    */
-  type AccountType
+  sealed trait AccountType
+  object AccountType {
+    case object Checking                          extends AccountType
+    final case class Saving(interestRate: Double) extends AccountType
+  }
 
   /**
    * EXERCISE 3
@@ -166,7 +209,7 @@ object bank {
    * account, including details on the type of bank account, holdings, customer
    * who owns the bank account, and customers who have access to the bank account.
    */
-  type Account
+  final case class Account(currency: String, accountType: AccountType, holdings: Map[String, String], ownerId: String)
 }
 
 /**
