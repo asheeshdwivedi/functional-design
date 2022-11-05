@@ -1,5 +1,8 @@
 package net.degoes
 
+import scala.annotation.tailrec
+import scala.util.Try
+
 /*
  * INTRODUCTION
  *
@@ -63,7 +66,21 @@ object input_stream {
      * exhausted, it will close the first input stream, make the second
      * input stream, and continue reading from the second one.
      */
-    def ++(that: => IStream): IStream = ???
+    def ++(that: => IStream): IStream = IStream { () =>
+      new InputStream {
+        var current = self.createInputStream()
+        @tailrec
+        def read(): Int = {
+          val byte = current.read()
+          if (byte < 0) {
+            current.close()
+            current = that.createInputStream()
+            read()
+          } else byte
+        }
+        override def close(): Unit = current.close()
+      }
+    }
 
     /**
      * EXERCISE 2
@@ -72,7 +89,11 @@ object input_stream {
      * try to create the first input stream, but if that fails by throwing
      * an exception, it will then try to create the second input stream.
      */
-    def orElse(that: => IStream): IStream = ???
+    def orElse(that: => IStream): IStream =
+      IStream(Try(self.createInputStream) match {
+        case scala.util.Failure(exception) => that.createInputStream
+        case scala.util.Success(value)     => value
+      })
 
     /**
      * EXERCISE 3
@@ -81,7 +102,8 @@ object input_stream {
      * create the input stream, but wrap it in Java's `BufferedInputStream`
      * before returning it.
      */
-    def buffered: IStream = ???
+    def buffered: IStream = IStream(() => new java.io.BufferedInputStream(self.createInputStream()))
+
   }
   object IStream {
 
@@ -105,8 +127,7 @@ object input_stream {
    * `fragments` by concatenating them into one. Regardless of
    * where the data comes from, everything should be buffered.
    */
-  lazy val allData: IStream = ???
-
+  lazy val allData: IStream         = primary.orElse(fragments.fold(IStream.empty)(_ ++ _).buffered)
   lazy val primary: IStream         = ???
   lazy val fragments: List[IStream] = ???
 }
@@ -129,7 +150,7 @@ object email_filter {
      * Add an "and" operator that will match an email if both the first and
      * the second email filter match the email.
      */
-    def &&(that: EmailFilter): EmailFilter = ???
+    def &&(that: EmailFilter): EmailFilter = EmailFilter(email => matches(email) && that.matches(email))
 
     /**
      * EXERCISE 2
@@ -137,7 +158,7 @@ object email_filter {
      * Add an "or" operator that will match an email if either the first or
      * the second email filter match the email.
      */
-    def ||(that: EmailFilter): EmailFilter = ???
+    def ||(that: EmailFilter): EmailFilter = EmailFilter(email => self.matches(email) || that.matches(email))
 
     /**
      * EXERCISE 3
@@ -145,7 +166,8 @@ object email_filter {
      * Add a "negate" operator that will match an email if this email filter
      * does NOT match an email.
      */
-    def unary_! : EmailFilter = ???
+    def unary_! : EmailFilter = EmailFilter(email => !self.matches(email))
+
   }
   object EmailFilter {
     def senderIs(address: Address): EmailFilter = EmailFilter(_.sender == address)
@@ -165,7 +187,9 @@ object email_filter {
    * addressed to "john@doe.com". Build this filter up compositionally
    * by using the defined constructors and operators.
    */
-  lazy val emailFilter1 = ???
+  lazy val emailFilter1 = EmailFilter.subjectContains("discount") &&
+    EmailFilter.bodyContains("N95") &&
+    !EmailFilter.recipientIs(Address("John@doe.com"))
 }
 
 /**
@@ -306,7 +330,7 @@ object contact_processing {
      * then the result must also fail. Only if both schema mappings succeed
      * can the resulting schema mapping succeed.
      */
-    def +(that: SchemaMapping): SchemaMapping = ???
+    def +(that: SchemaMapping): SchemaMapping = SchemaMapping(self.map(_).flatMap(that.map(_)))
 
     /**
      * EXERCISE 2
@@ -315,7 +339,7 @@ object contact_processing {
      * applying the effects of the first one, unless it fails, and in that
      * case, applying the effects of the second one.
      */
-    def orElse(that: SchemaMapping): SchemaMapping = ???
+    def orElse(that: SchemaMapping): SchemaMapping = SchemaMapping(csv => self.map(csv).orElse(that.map(csv)))
 
     /**
      * EXERCISE 3
@@ -366,7 +390,21 @@ object contact_processing {
    * company's official schema for contacts, by composing schema mappings
    * constructed from constructors and composed & transformed operators.
    */
-  lazy val schemaMapping: SchemaMapping = ???
+  lazy val schemaMapping: SchemaMapping = {
+    val reNameToPostalCode           = SchemaMapping.rename("posta", "postal_code")
+    val renameScreet                 = SchemaMapping.rename("street", "street_address")
+    val renameEmail                  = SchemaMapping.rename("email", "email_address")
+    val fname                        = SchemaMapping.combine("fname", "lname")("full_name")(_ + " " + _)
+    val relocateFullNameToFirstIndex = SchemaMapping.relocate("full_name", 0)
+    val relocateEmailToFirstIndex    = SchemaMapping.relocate("email_address", 1)
+
+    reNameToPostalCode +
+      renameScreet +
+      renameEmail +
+      fname +
+      relocateEmailToFirstIndex +
+      relocateFullNameToFirstIndex
+  }
 
   val UserUploadSchema: SchemaCSV =
     SchemaCSV(List("email", "fname", "lname", "country", "street", "postal"))
@@ -416,7 +454,8 @@ object ui_events {
      * Add a method `+` that composes two listeners into a single listener,
      * by sending each game event to both listeners.
      */
-    def +(that: Listener): Listener = ???
+    def +(that: Listener): Listener =
+      Listener(event => Try(self.onEvent(event)).fold(_ => that.onEvent(event), _ => that.onEvent(event)))
 
     /**
      * EXERCISE 2
@@ -425,7 +464,7 @@ object ui_events {
      * by sending each game event to either the left listener, if it does not
      * throw an exception, or the right listener, if the left throws an exception.
      */
-    def orElse(that: Listener): Listener = ???
+    def orElse(that: Listener): Listener = Listener(Try(self.onEvent).getOrElse(that.onEvent))
 
     /**
      * EXERCISE 3
@@ -433,7 +472,8 @@ object ui_events {
      * Add a `runOn` operator that returns a Listener that will call this one's
      * `onEvent` callback on the specified `ExecutionContext`.
      */
-    def runOn(ec: scala.concurrent.ExecutionContext): Listener = ???
+    def runOn(ec: scala.concurrent.ExecutionContext): Listener =
+      Listener(event => ec.execute(() => self.onEvent(event)))
 
     /**
      * EXERCISE 4
@@ -441,7 +481,10 @@ object ui_events {
      * Add a `debug` unary operator that will call the `onEvent` callback, but
      * before it does, it will print out the game event to the console.
      */
-    def debug: Listener = ???
+    def debug: Listener = Listener { event =>
+      println("Game event")
+      self.onEvent(event)
+    }
   }
 
   /**
@@ -451,7 +494,9 @@ object ui_events {
    * listeners in response to each game event, making the gfxUpdateListener
    * run on the `uiExecutionContext`, and debugging the input events.
    */
-  lazy val solution = ???
+  lazy val solution = (twinkleAnimationListener +
+    motionDetectionListener +
+    gfxUpdateListener.runOn(uiExecutionContext)).debug
 
   lazy val twinkleAnimationListener: Listener = ???
   lazy val motionDetectionListener: Listener  = ???
@@ -508,14 +553,16 @@ object education {
      *
      * Add an operator `+` that appends this quiz to the specified quiz.
      */
-    def +(that: Quiz): Quiz = ???
+    def +(that: Quiz): Quiz = Quiz { () =>
+      self.run() + that.run()
+    }
 
     /**
      * EXERCISE 3
      *
      * Add a unary operator `bonus` that marks this quiz as a bonus quiz.
      */
-    def bonus: Quiz = ???
+    def bonus: Quiz = Quiz(() => self.run().toBonus)
 
     /**
      * EXERCISE 4
@@ -524,7 +571,13 @@ object education {
      * quiz, and if it returns true, will execute the `ifPass` quiz afterward; but otherwise, will
      * execute the `ifFail` quiz.
      */
-    def check(f: QuizResult => Boolean)(ifPass: Quiz, ifFail: Quiz): Quiz = ???
+    def check(f: QuizResult => Boolean)(ifPass: Quiz, ifFail: Quiz): Quiz = Quiz { () =>
+      val result = self.run()
+      val second =
+        if (f(result)) ifPass.run()
+        else ifFail.run()
+      result + second
+    }
   }
   object Quiz {
     private def grade[A](f: String => A, checker: Checker[A]): QuizResult =
@@ -586,6 +639,10 @@ object education {
    * tough bonus question; and if the user fails the bonus question, fallback
    * to a simpler bonus question with fewer bonus points.
    */
-  lazy val exampleQuiz: Quiz =
-    Quiz(Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10)))
+  lazy val exampleQuiz: Quiz = q1 + q2 + q3 + q4 + bonusQuiz
+  val q1                     = Quiz(Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10)))
+  val q2, q3, q4             = q1
+  val hardBonus              = q1
+  val easyBonus              = q1
+  val bonusQuiz              = hardBonus.check(_.wrongPoints > 0)(easyBonus, Quiz.empty).bonus
 }
